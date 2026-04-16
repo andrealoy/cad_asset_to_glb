@@ -1,0 +1,6 @@
+flask
+gunicorn
+cascadio
+requests
+boto3
+python-dotenv
