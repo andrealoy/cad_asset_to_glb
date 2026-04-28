@@ -53,11 +53,22 @@
     }
     #new-btn       { background: transparent; color: #6b6b90; border: 1px solid #2e2e48; }
     #new-btn:hover { color: #c7c7e0; border-color: #5f5f80; }
+    #list-btn       { background: transparent; color: #818cf8; border: 1px solid #4f46e5; }
+    #list-btn:hover { background: rgba(79,70,229,0.1); }
     #convert-btn   { background: #4f46e5; color: #fff; }
     #convert-btn:hover { background: #6366f1; }
     #convert-btn:disabled { background: #2e2e48; color: #5f5f80; cursor: default; }
     #download-btn { background: #059669; color: #fff; }
     #download-btn:hover { background: #10b981; }
+    #prev-btn, #next-btn { background: transparent; color: #6b6b90; border: 1px solid #2e2e48; padding: 0.4rem 0.7rem; }
+    #prev-btn:hover, #next-btn:hover { color: #c7c7e0; border-color: #5f5f80; }
+    #prev-btn:disabled, #next-btn:disabled { color: #2e2e48; border-color: #1e1e2e; cursor: default; }
+    #version-label {
+      font-size: 0.72rem; color: #818cf8; padding: 0.4rem 0.7rem;
+      background: rgba(79,70,229,0.08); border: 1px solid #2e2e48;
+      border-radius: 6px; display: none; flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
     #wire-btn     { background: transparent; color: #6b6b90; border: 1px solid #2e2e48; }
     #wire-btn:hover { color: #c7c7e0; border-color: #5f5f80; }
     #wire-btn.active { color: #818cf8; border-color: #818cf8; }
@@ -122,6 +133,23 @@
 
     #loading-msg { font-size: 0.85rem; color: #6b6b90; }
 
+    #loading-log {
+      width: min(640px, 80vw);
+      max-height: 220px; overflow: auto;
+      background: #0a0a10; border: 1px solid #1e1e2e; border-radius: 6px;
+      padding: 0.6rem 0.8rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.7rem; line-height: 1.45; color: #c7c7e0;
+      white-space: pre-wrap; word-break: break-all;
+      display: none;
+    }
+    #loading-log.visible { display: block; }
+    #loading-log .log-stage    { color: #818cf8; font-weight: 600; }
+    #loading-log .log-cascadio { color: #a3a3c2; }
+    #loading-log .log-error    { color: #f87171; }
+    #loading-log .log-done     { color: #6ee7b7; font-weight: 600; }
+    #loading-log .log-warn     { color: #fbbf24; }
+
     /* ── Viewer ── */
     #viewer { position: absolute; inset: 0; display: none; }
     #viewer.visible { display: block; }
@@ -140,6 +168,120 @@
     }
 
     .msg-error { font-size: 0.8rem; color: #f87171; }
+
+    /* ── File list panel ── */
+    #file-list-panel {
+      position: absolute; inset: 0;
+      display: none; flex-direction: column;
+      padding: 1.2rem 1.6rem; gap: 0.8rem;
+      overflow: auto;
+    }
+    #file-list-panel.visible { display: flex; }
+
+    #file-list-panel .panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; flex-shrink: 0;
+    }
+    #file-list-panel .panel-header h2 {
+      font-size: 0.85rem; font-weight: 600; color: #c7c7e0;
+      letter-spacing: 0.04em;
+    }
+    #file-list-panel .panel-header .actions {
+      display: flex; gap: 0.5rem;
+    }
+    .panel-btn {
+      padding: 0.4rem 0.9rem; border-radius: 6px;
+      font-size: 0.78rem; font-weight: 600; cursor: pointer; border: none;
+      transition: background 0.15s;
+    }
+    .panel-btn.add { background: transparent; color: #818cf8; border: 1px dashed #4f46e5; }
+    .panel-btn.add:hover { background: rgba(79,70,229,0.1); }
+
+    #file-list { display: flex; flex-direction: column; gap: 0.6rem; }
+
+    .file-row {
+      display: grid;
+      grid-template-columns: 32px 1fr auto auto;
+      align-items: center; gap: 0.9rem;
+      background: #15151f; border: 1px solid #1e1e2e; border-radius: 8px;
+      padding: 0.7rem 0.9rem;
+    }
+    .file-row .step-icon {
+      width: 32px; height: 32px; border-radius: 6px;
+      background: linear-gradient(135deg, #4f46e5, #818cf8);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700; color: #fff; letter-spacing: 0.04em;
+    }
+    .file-row .file-meta { min-width: 0; }
+    .file-row .file-meta .fname {
+      font-size: 0.85rem; color: #e2e2e8; font-weight: 500;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .file-row .file-meta .fsize { font-size: 0.7rem; color: #6b6b90; margin-top: 2px; }
+
+    .tol-fields {
+      display: flex; align-items: center; gap: 0.9rem;
+      font-size: 0.7rem; color: #6b6b90;
+    }
+    .tol-fields .quality {
+      display: flex; flex-direction: column; gap: 4px; min-width: 200px;
+    }
+    .tol-fields .quality-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.65rem; letter-spacing: 0.04em; color: #5f5f80;
+    }
+    .tol-fields .quality-header .quality-value {
+      color: #c7c7e0; font-weight: 600; font-size: 0.72rem;
+    }
+    .tol-fields .quality-header .quality-detail {
+      color: #5f5f80; font-variant-numeric: tabular-nums; font-size: 0.62rem;
+    }
+    .tol-fields input[type="range"] {
+      width: 100%; accent-color: #4f46e5; cursor: pointer; margin: 0;
+    }
+    .tol-fields .field { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+    .tol-fields .field label { font-size: 0.65rem; letter-spacing: 0.04em; color: #5f5f80; }
+    .tol-fields input[type="number"] {
+      width: 56px; padding: 0.25rem 0.4rem;
+      background: #0f0f13; color: #c7c7e0;
+      border: 1px solid #2e2e48; border-radius: 4px;
+      font-size: 0.75rem; font-variant-numeric: tabular-nums;
+    }
+    .tol-fields input[type="number"]:focus { outline: none; border-color: #4f46e5; }
+    .tol-fields .checkbox-field {
+      display: flex; flex-direction: row; align-items: center; gap: 6px;
+      cursor: pointer; user-select: none;
+    }
+    .tol-fields .checkbox-field label {
+      font-size: 0.7rem; color: #c7c7e0; cursor: pointer;
+    }
+    .tol-fields .checkbox-field span {
+      font-size: 0.7rem; color: #c7c7e0; cursor: pointer;
+    }
+    .tol-fields input[type="checkbox"] { accent-color: #4f46e5; cursor: pointer; }
+
+    .row-actions { display: flex; gap: 0.4rem; }
+    .row-btn {
+      padding: 0.4rem 0.8rem; border-radius: 5px;
+      font-size: 0.74rem; font-weight: 600; cursor: pointer; border: none;
+      transition: background 0.15s;
+    }
+    .row-btn.convert { background: #4f46e5; color: #fff; }
+    .row-btn.convert:hover { background: #6366f1; }
+    .row-btn.convert:disabled { background: #2e2e48; color: #5f5f80; cursor: default; }
+    .row-btn.optimize { background: #d97706; color: #fff; }
+    .row-btn.optimize:hover { background: #f59e0b; }
+    .row-btn.optimize:disabled { background: #2e2e48; color: #5f5f80; cursor: default; }
+    .row-btn.download { background: #059669; color: #fff; text-decoration: none; }
+    .row-btn.download:hover { background: #10b981; }
+    .row-btn.view     { background: transparent; color: #818cf8; border: 1px solid #4f46e5; }
+    .row-btn.view:hover { background: rgba(79,70,229,0.1); }
+    .row-btn.remove {
+      background: transparent; color: #6b6b90; border: 1px solid #2e2e48;
+    }
+    .row-btn.remove:hover { color: #f87171; border-color: #7f1d1d; }
+    .file-row.converting { opacity: 0.6; }
+    .file-row .row-status { font-size: 0.7rem; color: #818cf8; }
   </style>
 
   <script type="importmap">
@@ -157,9 +299,14 @@
   <h1>STEP <span>→</span> GLB</h1>
   <div id="file-info"></div>
   <button  id="new-btn"      class="hbtn">← Nouveau</button>
+  <button  id="list-btn"     class="hbtn">Mes fichiers</button>
   <button  id="convert-btn"  class="hbtn">Convertir en GLB</button>
-  <a       id="download-btn" class="hbtn">Télécharger le GLB</a>
+  <button  id="prev-btn"     class="hbtn" title="Version précédente">◀</button>
+  <span    id="version-label"></span>
+  <button  id="next-btn"     class="hbtn" title="Version suivante">▶</button>
+  <a       id="download-btn" class="hbtn">⬇ Télécharger</a>
   <button  id="wire-btn"     class="hbtn">◇ Wireframe</button>
+  <button  id="optimize-btn" class="hbtn">⚡ Optimize for Web</button>
   <button  id="ai-btn"       class="hbtn">✦ AI Enhance</button>
 </header>
 
@@ -174,12 +321,23 @@
     <strong>Déposez un fichier STEP ici</strong>
     <p>ou cliquez pour parcourir</p>
     <p style="margin-top:.3rem;color:#3a3a58;font-size:.75rem;">.step · .stp</p>
-    <input type="file" id="file-input" accept=".step,.stp" />
+    <input type="file" id="file-input" accept=".step,.stp" multiple />
+  </div>
+
+  <div id="file-list-panel">
+    <div class="panel-header">
+      <h2>Fichiers chargés</h2>
+      <div class="actions">
+        <button type="button" class="panel-btn add" id="add-more-btn">+ Ajouter</button>
+      </div>
+    </div>
+    <div id="file-list"></div>
   </div>
 
   <div id="loading">
     <div class="spinner"></div>
     <p id="loading-msg">Conversion en cours…</p>
+    <pre id="loading-log"></pre>
   </div>
 
   <div id="viewer">
@@ -215,13 +373,26 @@ const convertBtn = document.getElementById('convert-btn');
 const dlBtn      = document.getElementById('download-btn');
 const aiBtn      = document.getElementById('ai-btn');
 const wireBtn    = document.getElementById('wire-btn');
+const optBtnHdr  = document.getElementById('optimize-btn');
+const prevBtn    = document.getElementById('prev-btn');
+const nextBtn    = document.getElementById('next-btn');
+const versionLabelEl = document.getElementById('version-label');
 const polycountEl = document.getElementById('polycount');
+const fileListPanel = document.getElementById('file-list-panel');
+const fileListEl    = document.getElementById('file-list');
+const addMoreBtn    = document.getElementById('add-more-btn');
+const loadingLogEl  = document.getElementById('loading-log');
+const listBtn       = document.getElementById('list-btn');
 let wireframeOn  = false;
 const captureOverlay  = document.getElementById('capture-overlay');
 const captureProgress = document.getElementById('capture-progress');
 
 
 async function generate3d() {
+  if (!currentEntry) {
+    showToast('✗ Aucun modèle actif', true);
+    return;
+  }
   captureProgress.textContent = 'Génération du modèle 3D…';
   captureOverlay.querySelector('p').textContent = 'Génération 3D en cours…';
   captureOverlay.classList.add('visible');
@@ -246,9 +417,30 @@ async function generate3d() {
 
     const localPath = data.local_path || '';
     const glbFile = localPath.split('hitem3d_output/')[1];
-    if (glbFile) {
-      loadGlb(`/hitem3d-glb/${glbFile}`, currentStem);
+    if (!glbFile) return;
+
+    const enhancedUrl = `/hitem3d-glb/${glbFile}`;
+    let aiBlob;
+    try {
+      const r = await fetch(enhancedUrl);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      aiBlob = await r.blob();
+    } catch (e) {
+      showToast(`✗ Téléchargement Enhanced : ${e.message}`, true);
+      return;
     }
+
+    const stem = `${currentStem}_enhanced`;
+    const blobUrl = URL.createObjectURL(aiBlob);
+    pushVersion(currentEntry, {
+      kind: 'enhanced',
+      label: 'AI Enhanced',
+      glbUrl: blobUrl,
+      glbSize: aiBlob.size,
+      stem,
+    });
+    renderFileList();
+    loadGlb(blobUrl, stem, currentEntry);
   } catch (e) {
     captureOverlay.classList.remove('visible');
     captureOverlay.querySelector('p').textContent = 'Capture des vues en cours…';
@@ -305,8 +497,534 @@ new ResizeObserver(() => {
 })();
 
 // State
-let currentFile   = null;
-let currentGlbUrl = null;
+let currentEntry  = null; // entry currently shown in the viewer
+let loadedFiles   = []; // [{ id, file, params, status, versions: [...], active }]
+let nextFileId    = 1;
+
+const DEFAULT_TOL = { quality: 3, relative: false, crease: 30 };
+
+// ── Version history helpers ────────────────────────────────────────────────
+// Each entry owns a stack of versions. `active` is the index currently shown.
+// A "version" = { kind: 'glb'|'enhanced'|'web', label, glbUrl, glbSize, stem,
+//                 triangles?, triQuality? }
+// Transformations push a new version; navigating back/forward shifts `active`.
+// Pushing a new version while `active` isn't the last one truncates the redos.
+
+function activeVer(entry) {
+  if (!entry || !entry.versions) return null;
+  return entry.versions[entry.active] || null;
+}
+
+function pushVersion(entry, v) {
+  if (!entry.versions) { entry.versions = []; entry.active = -1; }
+  // truncate any "redo" branch
+  for (let i = entry.versions.length - 1; i > entry.active; i--) {
+    URL.revokeObjectURL(entry.versions[i].glbUrl);
+  }
+  entry.versions.length = entry.active + 1;
+  entry.versions.push(v);
+  entry.active = entry.versions.length - 1;
+}
+
+function clearVersions(entry) {
+  if (entry.versions) {
+    entry.versions.forEach(v => URL.revokeObjectURL(v.glbUrl));
+  }
+  entry.versions = [];
+  entry.active = -1;
+}
+
+function navigate(entry, delta) {
+  if (!entry || !entry.versions) return;
+  const idx = entry.active + delta;
+  if (idx < 0 || idx >= entry.versions.length) return;
+  entry.active = idx;
+  const v = entry.versions[idx];
+  loadGlb(v.glbUrl, v.stem, entry);
+  renderFileList();
+}
+
+// Quality preset table: 1 = brouillon (rapide, peu de polys),
+//                       5 = ultra (lent, beaucoup de polys, lisse).
+// Index 0 unused (slider starts at 1).
+const QUALITY_PRESETS = [
+  null,
+  { label: 'Brouillon', linear: 0.1,   angular: 1.0 },
+  { label: 'Basse',     linear: 0.05,  angular: 0.7 },
+  { label: 'Standard',  linear: 0.01,  angular: 0.5 },
+  { label: 'Haute',     linear: 0.005, angular: 0.3 },
+  { label: 'Ultra',     linear: 0.001, angular: 0.2 },
+];
+function qualityPreset(q) {
+  const i = Math.min(5, Math.max(1, q | 0));
+  return QUALITY_PRESETS[i];
+}
+
+function fmtSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  if (bytes >= 1024)        return (bytes / 1024).toFixed(1) + ' KB';
+  return bytes + ' B';
+}
+
+function fmtTri(n) {
+  if (!isFinite(n) || n <= 0) return '0';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+  return Math.round(n).toString();
+}
+
+function renderFileList() {
+  fileListEl.innerHTML = '';
+  loadedFiles.forEach(entry => {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    row.dataset.id = entry.id;
+
+    const fileStem = entry.file.name.replace(/\.[^.]+$/, '');
+    const v = activeVer(entry);
+    const isDone = entry.status === 'done' && v;
+    const canOptimize = isDone && v.kind !== 'web';
+    const versionsCount = entry.versions ? entry.versions.length : 0;
+    const badge = (versionsCount > 1)
+      ? `<span style="color:#818cf8;margin-left:6px;">[${entry.active + 1}/${versionsCount} · ${v.label}]</span>`
+      : '';
+    const dlLabel = isDone ? `⬇ ${v.label}` : '⬇ Télécharger';
+    const dlName  = isDone ? `${v.stem}.glb` : `${fileStem}.glb`;
+    const actionsHtml = isDone
+      ? `
+          <button type="button" class="row-btn view">Voir</button>
+          <a class="row-btn download" href="${v.glbUrl}" download="${dlName}">${dlLabel}</a>
+          ${canOptimize ? '<button type="button" class="row-btn optimize">Optimize for Web</button>' : ''}
+          <button type="button" class="row-btn convert">Reconvertir</button>
+          <button type="button" class="row-btn remove" title="Retirer">✕</button>
+        `
+      : `
+          <button type="button" class="row-btn convert">Convertir</button>
+          <button type="button" class="row-btn remove" title="Retirer">✕</button>
+        `;
+
+    row.innerHTML = `
+      <div class="step-icon">STEP</div>
+      <div class="file-meta">
+        <div class="fname"></div>
+        <div class="fsize"></div>
+      </div>
+      <div class="tol-fields">
+        <div class="quality">
+          <div class="quality-header">
+            <span>Qualité : <span class="quality-value"></span></span>
+            <span class="quality-detail"></span>
+          </div>
+          <input type="range" min="1" max="5" step="1" data-param="quality" />
+        </div>
+        <div class="field">
+          <label>Crease (°)</label>
+          <input type="number" step="5" min="0" max="180" data-param="crease" />
+        </div>
+        <label class="checkbox-field"
+               title="Si coché, les tolérances sont proportionnelles à la taille de l'objet (recommandé pour des pièces de tailles très différentes dans le même fichier).">
+          <input type="checkbox" data-param="relative" />
+          <span>Adapter à la taille</span>
+        </label>
+      </div>
+      <div class="row-actions">${actionsHtml}</div>
+    `;
+
+    const fnameEl = row.querySelector('.fname');
+    fnameEl.innerHTML = '';
+    fnameEl.appendChild(document.createTextNode(entry.file.name));
+    if (badge) fnameEl.insertAdjacentHTML('beforeend', badge);
+    row.querySelector('.fsize').textContent =
+      fmtSize(entry.file.size) + (isDone && v.glbSize ? ` → ${fmtSize(v.glbSize)} GLB` : '');
+    row.querySelector('input[data-param="quality"]').value    = entry.params.quality;
+    row.querySelector('input[data-param="crease"]').value     = entry.params.crease;
+    row.querySelector('input[data-param="relative"]').checked = entry.params.relative;
+
+    const qValueEl  = row.querySelector('.quality-value');
+    const qDetailEl = row.querySelector('.quality-detail');
+    const refreshQualityLabel = () => {
+      const p = qualityPreset(entry.params.quality);
+      qValueEl.textContent  = p.label;
+      let detail = `lin ${p.linear} · ang ${p.angular}`;
+      if (typeof entry.triangles === 'number' && entry.triQuality) {
+        const baseP = qualityPreset(entry.triQuality);
+        const measured = entry.triangles;
+        if (entry.params.quality === entry.triQuality) {
+          detail += ` · ${fmtTri(measured)} tri`;
+        } else {
+          const est = measured * (baseP.linear / p.linear);
+          detail += ` · ${fmtTri(measured)} → ~${fmtTri(est)} tri`;
+        }
+      }
+      qDetailEl.textContent = detail;
+    };
+    refreshQualityLabel();
+
+    row.querySelectorAll('.tol-fields input').forEach(inp => {
+      const handler = () => {
+        const key = inp.dataset.param;
+        if (key === 'relative') {
+          entry.params.relative = inp.checked;
+        } else if (key === 'quality') {
+          const val = parseInt(inp.value, 10);
+          if (!isNaN(val)) {
+            entry.params.quality = Math.min(5, Math.max(1, val));
+            refreshQualityLabel();
+          }
+        } else {
+          const val = parseFloat(inp.value);
+          if (!isNaN(val) && val >= 0) entry.params[key] = val;
+          else inp.value = entry.params[key];
+        }
+      };
+      inp.addEventListener('input', handler);
+      inp.addEventListener('change', handler);
+    });
+
+    row.querySelector('.row-btn.convert').addEventListener('click', () => convertEntry(entry));
+    const optBtn = row.querySelector('.row-btn.optimize');
+    if (optBtn) {
+      optBtn.addEventListener('click', () => optimizeEntry(entry));
+    }
+    row.querySelector('.row-btn.remove').addEventListener('click', () => {
+      clearVersions(entry);
+      loadedFiles = loadedFiles.filter(f => f.id !== entry.id);
+      if (loadedFiles.length === 0) showDropZone();
+      else renderFileList();
+    });
+    const viewBtn = row.querySelector('.row-btn.view');
+    if (viewBtn) {
+      viewBtn.addEventListener('click', () => {
+        const av = activeVer(entry);
+        if (av) loadGlb(av.glbUrl, av.stem, entry);
+      });
+    }
+
+    fileListEl.appendChild(row);
+  });
+}
+
+function addFiles(fileList) {
+  let added = 0;
+  for (const file of fileList) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['step', 'stp'].includes(ext)) continue;
+    loadedFiles.push({
+      id: nextFileId++,
+      file,
+      params: { ...DEFAULT_TOL },
+      status: 'idle',
+      versions: [],
+      active: -1,
+    });
+    added++;
+  }
+  if (added === 0) {
+    fileInfo.innerHTML = '<span class="msg-error">Aucun fichier .step/.stp valide</span>';
+    return;
+  }
+  fileInfo.innerHTML = `<span class="name">${loadedFiles.length} fichier(s) chargé(s)</span>`;
+  newBtn.style.display = 'inline-block';
+  listBtn.style.display = 'inline-block';
+  showFileList();
+  renderFileList();
+}
+
+function appendLog(kind, source, text) {
+  const span = document.createElement('div');
+  let cls = 'log-cascadio';
+  if (kind === 'stage')  cls = 'log-stage';
+  if (kind === 'error')  cls = 'log-error';
+  if (kind === 'done')   cls = 'log-done';
+  if (source === 'normals') cls = 'log-warn';
+  span.className = cls;
+  const prefix = source ? `[${source}] ` : '';
+  span.textContent = `${prefix}${text}`;
+  loadingLogEl.appendChild(span);
+  loadingLogEl.scrollTop = loadingLogEl.scrollHeight;
+}
+
+function resetLog() {
+  loadingLogEl.innerHTML = '';
+  loadingLogEl.classList.add('visible');
+}
+
+async function convertEntry(entry) {
+  const row = fileListEl.querySelector(`.file-row[data-id="${entry.id}"]`);
+  if (row) row.classList.add('converting');
+
+  // Reconvert wipes history (per design).
+  clearVersions(entry);
+
+  showLoading(`Conversion ${entry.file.name}…`);
+  resetLog();
+  appendLog('stage', null, `▶ Envoi ${entry.file.name}`);
+
+  // Step 1 — POST file, get a job_id
+  const form = new FormData();
+  form.append('file', entry.file);
+  const preset = qualityPreset(entry.params.quality);
+  form.append('tol_linear',   String(preset.linear));
+  form.append('tol_angular',  String(preset.angular));
+  form.append('tol_relative', entry.params.relative ? 'true' : 'false');
+  form.append('crease_angle', String(entry.params.crease));
+  form.append('quality',      String(entry.params.quality));
+
+  let jobId;
+  try {
+    const res = await fetch('/convert', { method: 'POST', body: form });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(error);
+    }
+    const data = await res.json();
+    jobId = data.job_id;
+  } catch (e) {
+    appendLog('error', null, `✗ ${e.message}`);
+    if (row) row.classList.remove('converting');
+    showFileList();
+    showToast(`✗ ${e.message}`, true);
+    return;
+  }
+
+  appendLog('stage', null, `↺ job ${jobId.slice(0, 8)} démarré`);
+
+  // Step 2 — open SSE stream for live logs
+  // Note: EventSource fires onerror for ANY transient hiccup (browser
+  // buffering, brief network blip, etc.) and will auto-reconnect by itself.
+  // We must only treat it as fatal when readyState is CLOSED (i.e. the
+  // browser gave up reconnecting).
+  const stem = entry.file.name.replace(/\.[^.]+$/, '');
+  await new Promise((resolve) => {
+    const es = new EventSource(`/convert/stream/${jobId}`);
+    let finished = false;
+    let lostNoticeShown = false;
+
+    function finish(outcome) {
+      if (finished) return;
+      finished = true;
+      es.close();
+      resolve(outcome);
+    }
+
+    es.onmessage = (msg) => {
+      let ev;
+      try { ev = JSON.parse(msg.data); } catch { return; }
+      const { kind, payload } = ev;
+      if (kind === 'log') {
+        appendLog('log', payload.source, payload.line);
+      } else if (kind === 'stage') {
+        appendLog('stage', null, payload.message);
+      } else if (kind === 'error') {
+        appendLog('error', null, `✗ ${payload.message}`);
+        finish({ ok: false, error: payload.message });
+      } else if (kind === 'done') {
+        appendLog('done', null, `✓ ${payload.message}`);
+        if (typeof payload.triangles === 'number') {
+          entry.triangles    = payload.triangles;
+          entry.triQuality   = payload.quality || entry.params.quality;
+        }
+        finish({ ok: true, info: payload });
+      } else if (kind === 'end') {
+        finish({ ok: false, error: 'stream ended without result' });
+      }
+    };
+
+    es.onerror = () => {
+      // readyState 0 = CONNECTING (auto-reconnecting) → keep waiting.
+      // readyState 1 = OPEN → spurious error event, ignore.
+      // readyState 2 = CLOSED → server gave up or unreachable.
+      if (es.readyState === EventSource.CLOSED) {
+        if (!finished) {
+          appendLog('error', null, '✗ Connexion SSE perdue (CLOSED)');
+          finish({ ok: false, error: 'SSE connection lost' });
+        }
+        return;
+      }
+      // CONNECTING: notify once but keep waiting for reconnection
+      if (!lostNoticeShown && es.readyState === EventSource.CONNECTING) {
+        lostNoticeShown = true;
+        appendLog('log', 'sse',
+          '… reconnexion SSE en cours (le job continue côté serveur)');
+      }
+    };
+  }).then(async (outcome) => {
+    if (!outcome.ok) {
+      if (row) row.classList.remove('converting');
+      showFileList();
+      showToast(`✗ ${outcome.error}`, true);
+      return;
+    }
+
+    // Step 3 — fetch the resulting GLB
+    appendLog('stage', null, '⇣ Téléchargement du GLB...');
+    let blob;
+    try {
+      const res = await fetch(`/convert/result/${jobId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      blob = await res.blob();
+    } catch (e) {
+      appendLog('error', null, `✗ Téléchargement : ${e.message}`);
+      if (row) row.classList.remove('converting');
+      showFileList();
+      showToast(`✗ ${e.message}`, true);
+      return;
+    }
+
+    const blobUrl = URL.createObjectURL(blob);
+    const stemName = entry.file.name.replace(/\.[^.]+$/, '');
+    pushVersion(entry, {
+      kind: 'glb',
+      label: 'Converti',
+      glbUrl: blobUrl,
+      glbSize: blob.size,
+      stem: stemName,
+    });
+    entry.status = 'done';
+
+    if (row) row.classList.remove('converting');
+    renderFileList();
+    loadGlb(blobUrl, stemName, entry);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Optimize-for-Web pipeline (clean_normals → gltfpack QA + Web → restore_names)
+// ---------------------------------------------------------------------------
+async function optimizeEntry(entry) {
+  const src = activeVer(entry);
+  if (!src) {
+    showToast('✗ Aucun GLB à optimiser', true);
+    return;
+  }
+  if (src.kind === 'web') {
+    showToast('Déjà optimisé Web', false);
+    return;
+  }
+
+  showLoading();
+  loadingMsg.textContent = `Optimisation Web : ${entry.file.name}`;
+  resetLog();
+  const stemBase = src.stem;
+  const row = fileListEl.querySelector(`[data-id="${entry.id}"]`);
+  if (row) row.classList.add('converting');
+  appendLog('stage', null, `▶ Optimisation Web : ${stemBase}`);
+
+  // Step 1 — re-upload the active version's GLB to /optimize
+  let blobIn;
+  try {
+    const r0 = await fetch(src.glbUrl);
+    blobIn = await r0.blob();
+  } catch (e) {
+    appendLog('error', null, `✗ Lecture GLB local : ${e.message}`);
+    if (row) row.classList.remove('converting');
+    showFileList();
+    return;
+  }
+
+  const form = new FormData();
+  form.append('file', new File([blobIn], `${stemBase}.glb`, { type: 'model/gltf-binary' }));
+
+  let jobId;
+  try {
+    const res = await fetch('/optimize', { method: 'POST', body: form });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      throw new Error(error);
+    }
+    ({ job_id: jobId } = await res.json());
+  } catch (e) {
+    appendLog('error', null, `✗ Soumission : ${e.message}`);
+    if (row) row.classList.remove('converting');
+    showFileList();
+    showToast(`✗ ${e.message}`, true);
+    return;
+  }
+  appendLog('stage', null, `↺ job ${jobId.slice(0, 8)} démarré`);
+
+  // Step 2 — same SSE flow as convertEntry
+  await new Promise((resolve) => {
+    const es = new EventSource(`/convert/stream/${jobId}`);
+    let finished = false;
+    let lostNoticeShown = false;
+    function finish(outcome) {
+      if (finished) return;
+      finished = true;
+      es.close();
+      resolve(outcome);
+    }
+    es.onmessage = (msg) => {
+      let ev;
+      try { ev = JSON.parse(msg.data); } catch { return; }
+      const { kind, payload } = ev;
+      if (kind === 'log') {
+        appendLog('log', payload.source, payload.line);
+      } else if (kind === 'stage') {
+        appendLog('stage', null, payload.message);
+      } else if (kind === 'error') {
+        appendLog('error', null, `✗ ${payload.message}`);
+        finish({ ok: false, error: payload.message });
+      } else if (kind === 'done') {
+        appendLog('done', null, `✓ ${payload.message}`);
+        finish({ ok: true, info: payload });
+      } else if (kind === 'end') {
+        finish({ ok: false, error: 'stream ended without result' });
+      }
+    };
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED) {
+        if (!finished) {
+          appendLog('error', null, '✗ Connexion SSE perdue (CLOSED)');
+          finish({ ok: false, error: 'SSE connection lost' });
+        }
+        return;
+      }
+      if (!lostNoticeShown && es.readyState === EventSource.CONNECTING) {
+        lostNoticeShown = true;
+        appendLog('log', 'sse',
+          '… reconnexion SSE en cours (le job continue côté serveur)');
+      }
+    };
+  }).then(async (outcome) => {
+    if (!outcome.ok) {
+      if (row) row.classList.remove('converting');
+      showFileList();
+      showToast(`✗ ${outcome.error}`, true);
+      return;
+    }
+
+    // Step 3 — fetch the optimized _web.glb
+    appendLog('stage', null, '⇣ Téléchargement du GLB optimisé...');
+    let webBlob;
+    try {
+      const res = await fetch(`/convert/result/${jobId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      webBlob = await res.blob();
+    } catch (e) {
+      appendLog('error', null, `✗ Téléchargement : ${e.message}`);
+      if (row) row.classList.remove('converting');
+      showFileList();
+      showToast(`✗ ${e.message}`, true);
+      return;
+    }
+
+    // Push the optimized GLB as a new version in this entry's history.
+    const webBlobUrl = URL.createObjectURL(webBlob);
+    const webStem = `${stemBase}_web`;
+    pushVersion(entry, {
+      kind: 'web',
+      label: 'Web Optimisé',
+      glbUrl: webBlobUrl,
+      glbSize: webBlob.size,
+      stem: webStem,
+    });
+
+    if (row) row.classList.remove('converting');
+    renderFileList();
+    loadGlb(webBlobUrl, webStem, entry);
+    showToast(`✓ ${webStem}.glb prêt (${(webBlob.size/1024).toFixed(1)} KB)`);
+  });
+}
 
 // Drop / click
 dropZone.addEventListener('click', () => fileInput.click());
@@ -316,21 +1034,35 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-ove
 dropZone.addEventListener('drop', e => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
-  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+});
+// Allow drop onto the list panel as well to add more
+fileListPanel.addEventListener('dragover', e => { e.preventDefault(); });
+fileListPanel.addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
 });
 fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+  if (fileInput.files.length) addFiles(fileInput.files);
+  fileInput.value = '';
+});
+addMoreBtn.addEventListener('click', () => fileInput.click());
+listBtn.addEventListener('click', () => {
+  if (loadedFiles.length) showFileList();
 });
 
 newBtn.addEventListener('click', () => {
-  currentFile = null;
+  loadedFiles.forEach(e => clearVersions(e));
+  loadedFiles = [];
   fileInput.value = '';
   fileInfo.innerHTML = '';
-  [newBtn, convertBtn, dlBtn].forEach(b => b.style.display = 'none');
-  if (currentGlbUrl) { URL.revokeObjectURL(currentGlbUrl); currentGlbUrl = null; }
+  [newBtn, listBtn, convertBtn, dlBtn, prevBtn, nextBtn].forEach(b => b.style.display = 'none');
+  versionLabelEl.style.display = 'none';
   dlBtn.href = '';
   aiBtn.style.display = 'none';
   wireBtn.style.display = 'none';
+  if (optBtnHdr) optBtnHdr.style.display = 'none';
+  currentEntry = null;
   wireframeOn = false;
   wireBtn.classList.remove('active');
   clearModel();
@@ -338,66 +1070,50 @@ newBtn.addEventListener('click', () => {
 });
 
 convertBtn.addEventListener('click', () => {
-  if (currentFile) sendToServer(currentFile);
+  // Legacy single-file convert button (no longer surfaced; kept as no-op for safety)
 });
 
-// File selected → show header buttons
-function handleFile(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (!['step', 'stp'].includes(ext)) {
-    fileInfo.innerHTML = '<span class="msg-error">Format invalide — .step ou .stp requis</span>';
-    return;
-  }
-  currentFile = file;
-  const stem = file.name.replace(/\.[^.]+$/, '');
-  fileInfo.innerHTML = `<span class="name">${stem}</span>`;
-  newBtn.style.display     = 'inline-block';
-  convertBtn.style.display = 'inline-block';
-  convertBtn.disabled      = false;
-  convertBtn.textContent   = 'Convertir en GLB';
-  dlBtn.style.display      = 'none';
-}
+// File selected → handled by addFiles() (see above)
 
-// Server conversion → display GLB in viewer
-async function sendToServer(file) {
-  convertBtn.disabled    = true;
-  convertBtn.textContent = 'Conversion…';
-  showLoading('Conversion en cours…');
-
-  const form = new FormData();
-  form.append('file', file);
-
-  let blob;
-  try {
-    const res = await fetch('/convert', { method: 'POST', body: form });
-    if (!res.ok) {
-      const { error } = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      restoreAfterError(`✗ ${error}`);
-      return;
-    }
-    blob = await res.blob();
-  } catch {
-    restoreAfterError('✗ Erreur réseau');
-    return;
-  }
-
-  if (currentGlbUrl) URL.revokeObjectURL(currentGlbUrl);
-  currentGlbUrl = URL.createObjectURL(blob);
-
-  const stem = file.name.replace(/\.[^.]+$/, '');
-  dlBtn.href            = currentGlbUrl;
-  dlBtn.download        = `${stem}.glb`;
-  dlBtn.style.display   = 'inline-block';
-  convertBtn.style.display = 'none';
-
-  loadGlb(currentGlbUrl, stem);
-}
+// Server conversion is handled per-row in convertEntry() above.
 
 // current stem kept for capture filenames
 let currentStem = 'model';
 
-function loadGlb(url, stem = 'model') {
-  currentStem = stem;
+function updateHeaderForEntry(entry) {
+  const v = activeVer(entry);
+  if (!v) {
+    [dlBtn, prevBtn, nextBtn, optBtnHdr].forEach(b => { if (b) b.style.display = 'none'; });
+    versionLabelEl.style.display = 'none';
+    return;
+  }
+  dlBtn.href          = v.glbUrl;
+  dlBtn.download      = `${v.stem}.glb`;
+  dlBtn.style.display = 'inline-block';
+
+  const n = entry.versions.length;
+  if (n > 1) {
+    versionLabelEl.textContent = `${entry.active + 1}/${n} · ${v.label}`;
+    versionLabelEl.style.display = 'inline-block';
+    prevBtn.style.display = 'inline-block';
+    nextBtn.style.display = 'inline-block';
+    prevBtn.disabled = entry.active <= 0;
+    nextBtn.disabled = entry.active >= n - 1;
+  } else {
+    versionLabelEl.style.display = 'none';
+    prevBtn.style.display = 'none';
+    nextBtn.style.display = 'none';
+  }
+
+  if (optBtnHdr) {
+    optBtnHdr.style.display = (v.kind !== 'web') ? 'inline-block' : 'none';
+    optBtnHdr.disabled = false;
+  }
+}
+
+function loadGlb(url, stem = 'model', entry = null) {
+  currentStem  = stem;
+  currentEntry = entry;
   showLoading('Chargement du modèle…');
   new GLTFLoader().load(url, gltf => {
     clearModel();
@@ -411,6 +1127,7 @@ function loadGlb(url, stem = 'model') {
     wireBtn.style.display = 'inline-block';
     wireframeOn = false;
     wireBtn.classList.remove('active');
+    updateHeaderForEntry(currentEntry);
     showViewerPane();
   }, undefined, err => {
     restoreAfterError('✗ Erreur affichage GLB');
@@ -444,30 +1161,34 @@ function fitCamera(model) {
 }
 
 function restoreAfterError(msg) {
-  showDropZone();
+  showFileList();
   fileInfo.innerHTML += ` <span class="msg-error">${msg}</span>`;
-  if (currentFile) {
-    convertBtn.disabled    = false;
-    convertBtn.textContent = 'Convertir en GLB';
-    convertBtn.style.display = 'inline-block';
-    newBtn.style.display   = 'inline-block';
-  }
 }
 
 function showDropZone() {
   dropZone.classList.remove('hidden');
+  fileListPanel.classList.remove('visible');
+  loadingEl.classList.remove('visible');
+  viewerEl.classList.remove('visible');
+}
+function showFileList() {
+  dropZone.classList.add('hidden');
+  fileListPanel.classList.add('visible');
   loadingEl.classList.remove('visible');
   viewerEl.classList.remove('visible');
 }
 function showLoading(msg) {
   loadingMsg.textContent = msg;
   dropZone.classList.add('hidden');
+  fileListPanel.classList.remove('visible');
   loadingEl.classList.add('visible');
   viewerEl.classList.remove('visible');
 }
 function showViewerPane() {
   dropZone.classList.add('hidden');
+  fileListPanel.classList.remove('visible');
   loadingEl.classList.remove('visible');
+  loadingLogEl.classList.remove('visible');
   viewerEl.classList.add('visible');
 }
 
@@ -480,6 +1201,17 @@ const VIEWS = [
 
 wireBtn.addEventListener('click', toggleWireframe);
 aiBtn.addEventListener('click', captureViews);
+if (optBtnHdr) {
+  optBtnHdr.addEventListener('click', () => {
+    if (!currentEntry) {
+      showToast('✗ Aucun modèle à optimiser', true);
+      return;
+    }
+    optimizeEntry(currentEntry);
+  });
+}
+prevBtn.addEventListener('click', () => navigate(currentEntry, -1));
+nextBtn.addEventListener('click', () => navigate(currentEntry, +1));
 
 function updatePolycount(model) {
   let tris = 0;

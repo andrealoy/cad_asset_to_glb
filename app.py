@@ -2,16 +2,252 @@ import os
 import re
 import base64
 import time
+import json
+import shutil
+import subprocess
 import tempfile
+import threading
+import queue
 import uuid
+import struct
 import requests as http_requests
 import boto3
+import numpy as np
 from botocore.exceptions import BotoCoreError, ClientError
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, send_file, jsonify, Response, stream_with_context
 import cascadio
+import pygltflib
 from dotenv import load_dotenv
 
+from clean_normals import clean_glb as _clean_glb
+
 load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# GLB normal computation
+# ---------------------------------------------------------------------------
+
+_COMPONENT_TYPE_TO_DTYPE = {
+    pygltflib.BYTE:           np.int8,
+    pygltflib.UNSIGNED_BYTE:  np.uint8,
+    pygltflib.SHORT:          np.int16,
+    pygltflib.UNSIGNED_SHORT: np.uint16,
+    pygltflib.UNSIGNED_INT:   np.uint32,
+    pygltflib.FLOAT:          np.float32,
+}
+_TYPE_TO_COMPONENTS = {
+    "SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4,
+    "MAT2": 4, "MAT3": 9, "MAT4": 16,
+}
+
+
+def _accessor_to_array(glb: pygltflib.GLTF2, accessor_idx: int) -> np.ndarray:
+    """Read a glTF accessor into a numpy array."""
+    acc   = glb.accessors[accessor_idx]
+    bview = glb.bufferViews[acc.bufferView]
+    blob  = glb.binary_blob()
+    dtype = _COMPONENT_TYPE_TO_DTYPE[acc.componentType]
+    n_comp = _TYPE_TO_COMPONENTS[acc.type]
+    byte_offset = (bview.byteOffset or 0) + (acc.byteOffset or 0)
+    count = acc.count
+    data = np.frombuffer(blob, dtype=dtype,
+                         count=count * n_comp,
+                         offset=byte_offset)
+    return data.reshape(count, n_comp) if n_comp > 1 else data
+
+
+def _sanitize_glb_names(glb: pygltflib.GLTF2) -> int:
+    """
+    Replace every node/mesh/scene name in the GLB with a Houdini-safe variant
+    (alphanumeric + underscore only, never empty, must not start with a digit).
+    Returns the number of names changed.
+    """
+    safe_re = re.compile(r"[^A-Za-z0-9_]+")
+    changed = 0
+    seen = set()
+
+    def _safe(name, fallback):
+        if not name:
+            base = fallback
+        else:
+            base = safe_re.sub("_", name).strip("_") or fallback
+            if base[0].isdigit():
+                base = f"_{base}"
+        # Disambiguate duplicates
+        candidate = base
+        i = 1
+        while candidate in seen:
+            i += 1
+            candidate = f"{base}_{i}"
+        seen.add(candidate)
+        return candidate
+
+    for i, scene in enumerate(glb.scenes or []):
+        new = _safe(scene.name, f"scene_{i}")
+        if new != scene.name:
+            scene.name = new
+            changed += 1
+    seen.clear()
+    for i, node in enumerate(glb.nodes or []):
+        new = _safe(node.name, f"node_{i}")
+        if new != node.name:
+            node.name = new
+            changed += 1
+    seen.clear()
+    for i, mesh in enumerate(glb.meshes or []):
+        new = _safe(mesh.name, f"mesh_{i}")
+        if new != mesh.name:
+            mesh.name = new
+            changed += 1
+    return changed
+
+
+def add_smooth_normals(glb_path: str, crease_angle_deg: float = 30.0) -> int:
+    """
+    Post-process a GLB file in-place. See module docstring above.
+    Returns the total triangle count across all primitives.
+    """
+    glb = pygltflib.GLTF2().load(glb_path)
+    blob = bytearray(glb.binary_blob())
+
+    n_renamed = _sanitize_glb_names(glb)
+
+    new_accessors  = list(glb.accessors)
+    new_buffer_views = list(glb.bufferViews)
+
+    cos_crease = float(np.cos(np.deg2rad(crease_angle_deg)))
+
+    t0 = time.time()
+    n_prims_done = 0
+    n_sharp_total = 0
+    n_tris_total  = 0
+    for mesh in glb.meshes:
+        for prim in mesh.primitives:
+            if prim.attributes.POSITION is None:
+                continue
+
+            pos = _accessor_to_array(glb, prim.attributes.POSITION).astype(np.float32)
+
+            if prim.indices is not None:
+                idx = _accessor_to_array(glb, prim.indices).astype(np.int32).ravel()
+            else:
+                idx = np.arange(len(pos), dtype=np.int32)
+
+            n_verts = len(pos)
+            triangles = idx.reshape(-1, 3)
+            n_tris = len(triangles)
+            n_tris_total += n_tris
+
+            # ---- Weld coincident vertices for normal accumulation ------------
+            _, welded_idx = np.unique(pos, axis=0, return_inverse=True)
+            welded_idx = welded_idx.astype(np.int32)
+            n_welded = int(welded_idx.max()) + 1
+
+            tri_welded = welded_idx[triangles]
+
+            # Per-face normals (length = 2 * triangle area)
+            v0 = pos[triangles[:, 0]]
+            v1 = pos[triangles[:, 1]]
+            v2 = pos[triangles[:, 2]]
+            face_normals = np.cross(v1 - v0, v2 - v0)
+            fn_len = np.linalg.norm(face_normals, axis=1, keepdims=True)
+            fn_len_safe = np.where(fn_len < 1e-12, 1.0, fn_len)
+            fn_unit = (face_normals / fn_len_safe).astype(np.float32)  # (n_tris, 3)
+
+            # Per-corner angle weight × face normal
+            corners = np.empty((3, n_tris, 3), dtype=np.float32)
+            for i in range(3):
+                a = pos[triangles[:, (i + 1) % 3]] - pos[triangles[:, i]]
+                b = pos[triangles[:, (i + 2) % 3]] - pos[triangles[:, i]]
+                a_len = np.linalg.norm(a, axis=1)
+                b_len = np.linalg.norm(b, axis=1)
+                denom = np.where((a_len < 1e-12) | (b_len < 1e-12),
+                                 1.0, a_len * b_len)
+                cos_a = np.clip(np.einsum("ij,ij->i", a, b) / denom, -1.0, 1.0)
+                corners[i] = (np.arccos(cos_a)[:, None] * fn_unit).astype(np.float32)
+
+            # Scatter-add into the welded vertex space
+            welded_normals = np.zeros((n_welded, 3), dtype=np.float64)
+            for i in range(3):
+                np.add.at(welded_normals, tri_welded[:, i], corners[i])
+
+            wn = np.linalg.norm(welded_normals, axis=1, keepdims=True)
+            wn = np.where(wn < 1e-12, 1.0, wn)
+            welded_normals = (welded_normals / wn).astype(np.float32)
+
+            # Splat back to every original vertex
+            smooth_per_vertex = welded_normals[welded_idx]  # (n_verts, 3)
+
+            # ---- Crease-aware fallback ---------------------------------------
+            # Each original vertex belongs to exactly one triangle (cascadio
+            # splits per corner). Build a per-vertex face-normal vector and
+            # compare it with the smoothed normal. If the angle exceeds the
+            # crease threshold, this corner is on a hard edge → use the face
+            # normal directly.
+            face_n_per_vertex = np.empty((n_verts, 3), dtype=np.float32)
+            face_n_per_vertex[triangles[:, 0]] = fn_unit
+            face_n_per_vertex[triangles[:, 1]] = fn_unit
+            face_n_per_vertex[triangles[:, 2]] = fn_unit
+
+            dots = np.einsum("ij,ij->i", smooth_per_vertex, face_n_per_vertex)
+            sharp_mask = dots < cos_crease  # True where smoothing crosses a crease
+
+            vertex_normals = smooth_per_vertex.copy()
+            vertex_normals[sharp_mask] = face_n_per_vertex[sharp_mask]
+
+            # Re-normalise (defensive — splatted/face normals are unit, but
+            # numerical drift in the splat is possible)
+            vn = np.linalg.norm(vertex_normals, axis=1, keepdims=True)
+            vn = np.where(vn < 1e-12, 1.0, vn)
+            vertex_normals = (vertex_normals / vn).astype(np.float32)
+
+            n_sharp_total += int(sharp_mask.sum())
+
+            # Append normal data to the binary blob
+            normal_bytes = vertex_normals.tobytes()
+            byte_offset  = len(blob)
+            blob.extend(normal_bytes)
+
+            bv_idx = len(new_buffer_views)
+            new_buffer_views.append(pygltflib.BufferView(
+                buffer=0,
+                byteOffset=byte_offset,
+                byteLength=len(normal_bytes),
+                target=pygltflib.ARRAY_BUFFER,
+            ))
+
+            acc_idx = len(new_accessors)
+            mins = vertex_normals.min(axis=0).tolist()
+            maxs = vertex_normals.max(axis=0).tolist()
+            new_accessors.append(pygltflib.Accessor(
+                bufferView=bv_idx,
+                byteOffset=0,
+                componentType=pygltflib.FLOAT,
+                count=n_verts,
+                type="VEC3",
+                min=mins,
+                max=maxs,
+            ))
+
+            prim.attributes.NORMAL = acc_idx
+            n_prims_done += 1
+
+    glb.accessors   = new_accessors
+    glb.bufferViews = new_buffer_views
+
+    # Update buffer byte length
+    glb.buffers[0].byteLength = len(blob)
+    glb.set_binary_blob(bytes(blob))
+    glb.save(glb_path)
+    elapsed = time.time() - t0
+    print(f"[normals] ✓ {n_prims_done} primitive(s), {n_tris_total} tri(s) "
+          f"processed in {elapsed:.2f}s "
+          f"(crease={crease_angle_deg}°, {n_sharp_total} sharp corner(s); "
+          f"{n_renamed} name(s) sanitized) → {glb_path}",
+          flush=True)
+    return n_tris_total
+
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -19,6 +255,143 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 @app.route("/")
 def index():
     return app.send_static_file("index.html")
+
+
+# ---------------------------------------------------------------------------
+# Async conversion jobs with live stderr streaming via SSE
+# ---------------------------------------------------------------------------
+
+# Job registry: { job_id: {status, lines: queue.Queue, result_path, work_dir,
+#                          error, stem, t_start} }
+_JOBS = {}
+_JOBS_LOCK = threading.Lock()
+
+
+def _emit(job, kind, payload=None):
+    """Push an event onto the job's SSE queue."""
+    job["lines"].put({"kind": kind, "payload": payload})
+
+
+def _capture_fd_to_queue(read_fd, job, source_label):
+    """Read from a pipe fd line-by-line and push events to the job queue."""
+    try:
+        with os.fdopen(read_fd, "r", buffering=1, errors="replace") as f:
+            for line in f:
+                line = line.rstrip("\r\n")
+                if not line:
+                    continue
+                # Mirror to server stdout for debugging
+                print(f"[{source_label}] {line}", flush=True)
+                _emit(job, "log", {"source": source_label, "line": line})
+    except Exception as e:
+        _emit(job, "log",
+              {"source": "capture", "line": f"(stderr capture error: {e})"})
+
+
+def _run_conversion(job_id, input_path, output_path, params, stem):
+    """Worker: redirect fd 1 & 2 to pipes, run cascadio + normals, push events."""
+    job = _JOBS[job_id]
+    job["status"] = "running"
+    t_start = time.time()
+    _emit(job, "stage",
+          {"name": "cascadio", "message": "Lancement de la tessellation..."})
+
+    # Pipe for stderr (fd 2) of native code — that's where OpenCASCADE writes
+    # its messages like "*** ERR StepReaderData ***". We do NOT redirect fd 1
+    # because our own print() calls inside the capture thread would loop back
+    # into the pipe.
+    r_err, w_err = os.pipe()
+    saved_stderr = os.dup(2)
+    os.dup2(w_err, 2)
+    os.close(w_err)
+
+    t_err = threading.Thread(
+        target=_capture_fd_to_queue, args=(r_err, job, "cascadio"),
+        daemon=True)
+    t_err.start()
+
+    code = None
+    crash = None
+    try:
+        try:
+            code = cascadio.step_to_glb(
+                input_path, output_path,
+                tol_linear=params["tol_linear"],
+                tol_angular=params["tol_angular"],
+                tol_relative=params["tol_relative"],
+            )
+        except Exception as e:
+            crash = f"{type(e).__name__}: {e}"
+    finally:
+        # Restore fd 2 (closes the write end of our pipe → reader sees EOF)
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stderr)
+
+    t_err.join(timeout=2)
+
+    cascadio_elapsed = time.time() - t_start
+
+    if crash is not None:
+        job["error"] = f"cascadio crashed: {crash}"
+        _emit(job, "error", {"message": job["error"]})
+        _emit(job, "end", None)
+        job["status"] = "error"
+        return
+
+    if code != 0:
+        job["error"] = f"cascadio returned code {code}"
+        _emit(job, "error", {"message": job["error"]})
+        _emit(job, "end", None)
+        job["status"] = "error"
+        return
+
+    if not os.path.exists(output_path):
+        job["error"] = "cascadio produced no output file"
+        _emit(job, "error", {"message": job["error"]})
+        _emit(job, "end", None)
+        job["status"] = "error"
+        return
+
+    out_size = os.path.getsize(output_path)
+    _emit(job, "stage", {
+        "name": "cascadio_done",
+        "message": f"cascadio OK en {cascadio_elapsed:.2f}s "
+                   f"({out_size/1024:.1f} KB)",
+    })
+
+    # Normals post-processing
+    crease_angle = float(params.get("crease_angle", 30.0))
+    _emit(job, "stage",
+          {"name": "normals",
+           "message": f"Calcul des normales (crease={crease_angle:g}°)..."})
+    t_n = time.time()
+    n_tris_total = 0
+    try:
+        n_tris_total = add_smooth_normals(
+            output_path, crease_angle_deg=crease_angle)
+        _emit(job, "stage", {
+            "name": "normals_done",
+            "message": f"Normales injectées en {time.time() - t_n:.2f}s "
+                       f"({n_tris_total} triangles)",
+        })
+    except Exception as e:
+        _emit(job, "log", {
+            "source": "normals",
+            "line": f"⚠ add_smooth_normals a échoué : "
+                    f"{type(e).__name__}: {e} (GLB brut conservé)",
+        })
+
+    job["result_path"] = output_path
+    job["status"] = "done"
+    total = time.time() - t_start
+    _emit(job, "done", {
+        "message": f"Conversion terminée en {total:.2f}s",
+        "stem": stem,
+        "size_kb": round(out_size / 1024, 1),
+        "triangles": n_tris_total,
+        "quality": params.get("quality"),
+    })
+    _emit(job, "end", None)
 
 
 @app.route("/convert", methods=["POST"])
@@ -30,23 +403,285 @@ def convert():
     if not file.filename.lower().endswith((".step", ".stp")):
         return jsonify({"error": "File must be a STEP file (.step or .stp)"}), 400
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, f"{uuid.uuid4()}.step")
-        output_path = os.path.join(tmpdir, f"{uuid.uuid4()}.glb")
+    # Optional tessellation tolerances from the client
+    def _to_float(name, default):
+        try:
+            return float(request.form.get(name, default))
+        except (TypeError, ValueError):
+            return default
 
-        file.save(input_path)
+    params = {
+        "tol_linear":   _to_float("tol_linear", 0.01),
+        "tol_angular":  _to_float("tol_angular", 0.5),
+        "tol_relative": (request.form.get("tol_relative", "false").lower()
+                         in ("1", "true", "yes", "on")),
+        "crease_angle": _to_float("crease_angle", 30.0),
+        "quality":      int(_to_float("quality", 3)),
+    }
 
-        result = cascadio.step_to_glb(input_path, output_path)
-        if result != 0:
-            return jsonify({"error": f"Conversion failed (code {result})"}), 500
+    # Persist file in a per-job temp dir (cleaned on result fetch)
+    work_dir = tempfile.mkdtemp(prefix="cad_job_")
+    input_path  = os.path.join(work_dir, f"{uuid.uuid4()}.step")
+    output_path = os.path.join(work_dir, f"{uuid.uuid4()}.glb")
+    file.save(input_path)
+    in_size = os.path.getsize(input_path)
 
-        stem = os.path.splitext(file.filename)[0]
-        return send_file(
-            output_path,
-            mimetype="model/gltf-binary",
-            as_attachment=True,
-            download_name=f"{stem}.glb",
+    job_id = uuid.uuid4().hex
+    stem   = os.path.splitext(file.filename)[0]
+
+    job = {
+        "status":      "queued",
+        "lines":       queue.Queue(),
+        "result_path": None,
+        "work_dir":    work_dir,
+        "error":       None,
+        "stem":        stem,
+        "t_start":     time.time(),
+    }
+    with _JOBS_LOCK:
+        _JOBS[job_id] = job
+
+    print(f"[convert] ▶ job {job_id} : {file.filename} "
+          f"({in_size/1024:.1f} KB), params={params}", flush=True)
+
+    _emit(job, "stage", {
+        "name": "queued",
+        "message": f"{file.filename} ({in_size/1024:.1f} KB) en file...",
+    })
+
+    t = threading.Thread(
+        target=_run_conversion,
+        args=(job_id, input_path, output_path, params, stem),
+        daemon=True,
+    )
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/convert/stream/<job_id>")
+def convert_stream(job_id):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if job is None:
+        return jsonify({"error": "unknown job"}), 404
+
+    @stream_with_context
+    def gen():
+        # Heartbeat every ~15s to keep the connection alive
+        while True:
+            try:
+                ev = job["lines"].get(timeout=15)
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                continue
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev["kind"] == "end":
+                break
+
+    headers = {
+        "Content-Type":      "text/event-stream",
+        "Cache-Control":     "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection":        "keep-alive",
+    }
+    return Response(gen(), headers=headers)
+
+
+@app.route("/convert/result/<job_id>")
+def convert_result(job_id):
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if job is None:
+        return jsonify({"error": "unknown job"}), 404
+    if job["status"] != "done" or not job["result_path"]:
+        return jsonify({"error": f"job not ready (status={job['status']})"}), 409
+
+    result_path = job["result_path"]
+    work_dir    = job["work_dir"]
+    stem        = job["stem"]
+
+    @stream_with_context
+    def stream_file():
+        try:
+            with open(result_path, "rb") as f:
+                while True:
+                    chunk = f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            # Clean up after streaming
+            with _JOBS_LOCK:
+                _JOBS.pop(job_id, None)
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    headers = {
+        "Content-Type":        "model/gltf-binary",
+        "Content-Disposition": f'attachment; filename="{stem}.glb"',
+    }
+    return Response(stream_file(), headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# Web optimization pipeline (clean_normals → gltfpack ×2 → restore_names ×2)
+# ---------------------------------------------------------------------------
+
+def _run_cmd_streamed(job, cmd, label):
+    """Run a subprocess streaming combined stdout/stderr into the job queue."""
+    _emit(job, "log", {"source": label, "line": f"$ {' '.join(cmd)}"})
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
         )
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"`{cmd[0]}` introuvable dans le PATH. Installe-le "
+            f"(brew install gltfpack ou npm i -g gltfpack) puis relance."
+        ) from e
+
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.rstrip("\r\n")
+        if line:
+            print(f"[{label}] {line}", flush=True)
+            _emit(job, "log", {"source": label, "line": line})
+    code = proc.wait()
+    if code != 0:
+        raise RuntimeError(f"{cmd[0]} returned code {code}")
+
+
+def _run_optimization(job_id, input_glb_path, stem):
+    """Worker: clean_normals (incl. node→mesh names) → gltfpack QA + Web.
+
+    Mesh names are propagated BEFORE gltfpack: clean_normals copies
+    node.name → mesh.name on the float32 GLB (which pygltflib can rewrite
+    safely), then gltfpack preserves them via `-km`. Doing it after gltfpack
+    would reopen a quantized GLB with pygltflib, which corrupts the
+    KHR_mesh_quantization metadata (accessor min/max in world-space vs
+    uint16 storage → thousands of validator errors).
+    """
+    job = _JOBS[job_id]
+    job["status"] = "running"
+    t_start = time.time()
+
+    work_dir   = job["work_dir"]
+    cleaned    = os.path.join(work_dir, "cleaned.glb")
+    qa_final   = os.path.join(work_dir, f"{stem}_qa.glb")
+    web_final  = os.path.join(work_dir, f"{stem}_web.glb")
+
+    try:
+        # 1. clean_normals (also propagates node.name → mesh.name)
+        _emit(job, "stage",
+              {"name": "clean",
+               "message": "Nettoyage des normales et propagation des noms..."})
+        _clean_glb(input_glb_path, cleaned)
+        _emit(job, "log", {
+            "source": "clean",
+            "line": f"cleaned.glb : {os.path.getsize(cleaned)/1024:.1f} KB",
+        })
+
+        # 2. gltfpack QA — preserve quality, no quantization, keep names
+        _emit(job, "stage",
+              {"name": "gltfpack_qa", "message": "gltfpack QA..."})
+        _run_cmd_streamed(
+            job,
+            ["gltfpack", "-i", cleaned, "-o", qa_final,
+             "-si", "0.1", "-noq", "-kn", "-km", "-ke"],
+            "gltfpack-qa",
+        )
+        _emit(job, "log", {
+            "source": "gltfpack-qa",
+            "line": f"{stem}_qa.glb  : {os.path.getsize(qa_final)/1024:.1f} KB",
+        })
+
+        # 3. gltfpack Web — full optimization (instancing, mesh dedup, quantize)
+        _emit(job, "stage",
+              {"name": "gltfpack_web", "message": "gltfpack Web..."})
+        _run_cmd_streamed(
+            job,
+            ["gltfpack", "-i", cleaned, "-o", web_final,
+             "-si", "0.1", "-mi", "-cc", "-kn", "-km", "-ke"],
+            "gltfpack-web",
+        )
+        _emit(job, "log", {
+            "source": "gltfpack-web",
+            "line": f"{stem}_web.glb : {os.path.getsize(web_final)/1024:.1f} KB",
+        })
+
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        job["error"] = msg
+        _emit(job, "error", {"message": msg})
+        _emit(job, "end", None)
+        job["status"] = "error"
+        return
+
+    job["result_path"] = web_final
+    # Bonus side-channel; not currently exposed via UI, kept for future use.
+    job["qa_path"] = qa_final
+    job["status"] = "done"
+    out_size = os.path.getsize(web_final)
+    total = time.time() - t_start
+    _emit(job, "done", {
+        "message": f"Optimisation terminée en {total:.2f}s",
+        "stem": f"{stem}_web",
+        "size_kb": round(out_size / 1024, 1),
+    })
+    _emit(job, "end", None)
+
+
+@app.route("/optimize", methods=["POST"])
+def optimize():
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".glb"):
+        return jsonify({"error": "File must be a .glb"}), 400
+
+    work_dir   = tempfile.mkdtemp(prefix="cad_opt_")
+    input_path = os.path.join(work_dir, "input.glb")
+    file.save(input_path)
+    in_size = os.path.getsize(input_path)
+
+    job_id = uuid.uuid4().hex
+    stem   = os.path.splitext(os.path.basename(file.filename))[0]
+    # Trim a trailing "_glb" if the client appended it
+    stem   = re.sub(r"_glb$", "", stem)
+
+    job = {
+        "status":      "queued",
+        "lines":       queue.Queue(),
+        "result_path": None,
+        "qa_path":     None,
+        "work_dir":    work_dir,
+        "error":       None,
+        "stem":        stem,
+        "t_start":     time.time(),
+    }
+    with _JOBS_LOCK:
+        _JOBS[job_id] = job
+
+    print(f"[optimize] ▶ job {job_id} : {file.filename} "
+          f"({in_size/1024:.1f} KB)", flush=True)
+
+    _emit(job, "stage", {
+        "name": "queued",
+        "message": f"{file.filename} ({in_size/1024:.1f} KB) en file...",
+    })
+
+    t = threading.Thread(
+        target=_run_optimization,
+        args=(job_id, input_path, stem),
+        daemon=True,
+    )
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
 
 
 VIEWS_DIR = os.path.join(os.path.dirname(__file__), "views")

@@ -21,4 +21,5 @@ RUN rm -f .env
 
 EXPOSE 8080
 
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "--timeout", "600", "--workers", "2"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "--timeout", "600", \
+     "--worker-class", "gthread", "--workers", "1", "--threads", "8"]
