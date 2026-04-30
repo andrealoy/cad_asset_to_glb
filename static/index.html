@@ -167,6 +167,38 @@
       pointer-events: none; display: none; font-variant-numeric: tabular-nums;
     }
 
+    #heavy-overlay {
+      position: absolute; inset: 0;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(15,15,19,0.92); backdrop-filter: blur(2px);
+      z-index: 10;
+    }
+    #heavy-overlay.visible { display: flex; }
+    #heavy-overlay .heavy-card {
+      background: #15151f; border: 1px solid #2e2e48; border-radius: 10px;
+      padding: 1.4rem 1.8rem; max-width: 380px; text-align: center;
+      box-shadow: 0 12px 32px rgba(0,0,0,.6);
+    }
+    #heavy-overlay .heavy-icon {
+      font-size: 1.8rem; color: #fbbf24; margin-bottom: 0.4rem;
+    }
+    #heavy-overlay .heavy-title {
+      font-size: 0.95rem; font-weight: 600; color: #e2e2e8; margin-bottom: 0.3rem;
+    }
+    #heavy-overlay .heavy-sub {
+      font-size: 0.78rem; color: #c7c7e0; margin-bottom: 0.4rem;
+      font-variant-numeric: tabular-nums;
+    }
+    #heavy-overlay .heavy-warn {
+      font-size: 0.72rem; color: #fbbf24; margin-bottom: 1rem;
+    }
+    #heavy-overlay #heavy-show {
+      padding: 0.5rem 1.1rem; border-radius: 6px; border: none;
+      background: #d97706; color: #fff; font-size: 0.8rem; font-weight: 600;
+      cursor: pointer;
+    }
+    #heavy-overlay #heavy-show:hover { background: #f59e0b; }
+
     .msg-error { font-size: 0.8rem; color: #f87171; }
 
     /* ── File list panel ── */
@@ -272,6 +304,44 @@
     .row-btn.optimize { background: #d97706; color: #fff; }
     .row-btn.optimize:hover { background: #f59e0b; }
     .row-btn.optimize:disabled { background: #2e2e48; color: #5f5f80; cursor: default; }
+
+    /* Popup menu shown when "Optimize for Web" is clicked */
+    .opt-menu {
+      position: absolute; z-index: 150;
+      min-width: 220px;
+      background: #15151f; border: 1px solid #2e2e48; border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.6);
+      padding: 0.35rem;
+      display: flex; flex-direction: column;
+      animation: opt-menu-in 0.12s ease-out;
+    }
+    @keyframes opt-menu-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0);    }
+    }
+    .opt-menu .opt-menu-title {
+      font-size: 0.62rem; letter-spacing: 0.06em;
+      color: #5f5f80; padding: 0.4rem 0.6rem 0.3rem;
+      text-transform: uppercase;
+    }
+    .opt-menu .opt-menu-item {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 0.45rem 0.6rem; border-radius: 5px;
+      cursor: pointer; border: none; background: transparent;
+      color: #e2e2e8; text-align: left;
+      transition: background 0.1s;
+    }
+    .opt-menu .opt-menu-item:hover { background: rgba(217,119,6,0.15); }
+    .opt-menu .opt-menu-item .label {
+      font-size: 0.78rem; font-weight: 600;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .opt-menu .opt-menu-item .label .num {
+      color: #d97706; font-variant-numeric: tabular-nums;
+    }
+    .opt-menu .opt-menu-item .hint {
+      font-size: 0.68rem; color: #6b6b90;
+    }
     .row-btn.download { background: #059669; color: #fff; text-decoration: none; }
     .row-btn.download:hover { background: #10b981; }
     .row-btn.view     { background: transparent; color: #818cf8; border: 1px solid #4f46e5; }
@@ -343,6 +413,15 @@
   <div id="viewer">
     <div id="hint">Orbite · Molette zoom · Clic droit pan</div>
     <div id="polycount"></div>
+    <div id="heavy-overlay">
+      <div class="heavy-card">
+        <div class="heavy-icon">▲</div>
+        <p class="heavy-title">Modèle volumineux</p>
+        <p class="heavy-sub" id="heavy-detail"></p>
+        <p class="heavy-warn">Le rendu peut ralentir fortement le navigateur.</p>
+        <button type="button" id="heavy-show">Afficher quand même</button>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -359,6 +438,7 @@
 import * as THREE        from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // DOM
@@ -501,7 +581,7 @@ let currentEntry  = null; // entry currently shown in the viewer
 let loadedFiles   = []; // [{ id, file, params, status, versions: [...], active }]
 let nextFileId    = 1;
 
-const DEFAULT_TOL = { quality: 3, relative: false, crease: 30 };
+const DEFAULT_TOL = { quality: 3, relative: false, crease: 30, webQuality: 3 };
 
 // ── Version history helpers ────────────────────────────────────────────────
 // Each entry owns a stack of versions. `active` is the index currently shown.
@@ -560,6 +640,89 @@ function qualityPreset(q) {
   return QUALITY_PRESETS[i];
 }
 
+// Web-optimization presets (mirrors WEB_PRESETS in app.py).
+// `keepRatio` is a rough estimate of triangles preserved (after gltfpack -si).
+const WEB_PRESETS = [
+  null,
+  { label: 'Lossless',  hint: 'aucune simplif, aucune quantif',   keepRatio: 1.00 },
+  { label: 'Léger',     hint: 'simplif 70%, meshopt',              keepRatio: 0.70 },
+  { label: 'Standard',  hint: 'simplif 50%, instancing, meshopt',  keepRatio: 0.50 },
+  { label: 'Compact',   hint: 'simplif 20%, quantif aggressive',   keepRatio: 0.20 },
+  { label: 'Aggressif', hint: 'simplif 5%, LOD lointain',          keepRatio: 0.05 },
+];
+function webPreset(q) {
+  const i = Math.min(5, Math.max(1, q | 0));
+  return WEB_PRESETS[i];
+}
+
+// ── Optimize-preset popup menu ───────────────────────────────────────────
+// Built once and reused. `openOptMenu(anchor, entry)` shows it under the
+// anchor; clicking an item sets `entry.params.webQuality` and launches the
+// optimization for that entry.
+let _optMenuEl = null;
+let _optMenuCleanup = null;
+
+function closeOptMenu() {
+  if (_optMenuEl) { _optMenuEl.remove(); _optMenuEl = null; }
+  if (_optMenuCleanup) { _optMenuCleanup(); _optMenuCleanup = null; }
+}
+
+function openOptMenu(anchor, entry) {
+  closeOptMenu();
+  const menu = document.createElement('div');
+  menu.className = 'opt-menu';
+  menu.innerHTML =
+    `<div class="opt-menu-title">Optimisation Web — niveau</div>` +
+    WEB_PRESETS.slice(1).map((p, i) => {
+      const q = i + 1;
+      const sel = (q === (entry.params.webQuality || 3)) ? ' ✓' : '';
+      return `<button type="button" class="opt-menu-item" data-q="${q}">
+                <span class="label"><span class="num">${q}</span> ${p.label}${sel}</span>
+                <span class="hint">${p.hint}</span>
+              </button>`;
+    }).join('');
+  document.body.appendChild(menu);
+
+  // Position under the anchor, clamped to the viewport.
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth;
+  const mh = menu.offsetHeight;
+  let left = r.left;
+  if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+  let top = r.bottom + 4;
+  if (top + mh > window.innerHeight - 8) top = r.top - mh - 4;
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top  = `${Math.max(8, top)}px`;
+
+  menu.querySelectorAll('.opt-menu-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const q = parseInt(el.dataset.q, 10);
+      if (!isNaN(q)) {
+        entry.params.webQuality = Math.min(5, Math.max(1, q));
+      }
+      closeOptMenu();
+      optimizeEntry(entry);
+    });
+  });
+
+  _optMenuEl = menu;
+  // Dismiss on outside click / escape / scroll / resize.
+  const onDocClick = (ev) => {
+    if (!menu.contains(ev.target) && ev.target !== anchor) closeOptMenu();
+  };
+  const onKey = (ev) => { if (ev.key === 'Escape') closeOptMenu(); };
+  setTimeout(() => document.addEventListener('click', onDocClick), 0);
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', closeOptMenu);
+  window.addEventListener('scroll', closeOptMenu, true);
+  _optMenuCleanup = () => {
+    document.removeEventListener('click', onDocClick);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', closeOptMenu);
+    window.removeEventListener('scroll', closeOptMenu, true);
+  };
+}
+
 function fmtSize(bytes) {
   if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
   if (bytes >= 1024)        return (bytes / 1024).toFixed(1) + ' KB';
@@ -590,11 +753,14 @@ function renderFileList() {
       : '';
     const dlLabel = isDone ? `⬇ ${v.label}` : '⬇ Télécharger';
     const dlName  = isDone ? `${v.stem}.glb` : `${fileStem}.glb`;
+    const optHtml = canOptimize
+      ? `<button type="button" class="row-btn optimize" title="Choisir un preset d'optimisation">⚡ Optimize for Web ▾</button>`
+      : '';
     const actionsHtml = isDone
       ? `
           <button type="button" class="row-btn view">Voir</button>
           <a class="row-btn download" href="${v.glbUrl}" download="${dlName}">${dlLabel}</a>
-          ${canOptimize ? '<button type="button" class="row-btn optimize">Optimize for Web</button>' : ''}
+          ${optHtml}
           <button type="button" class="row-btn convert">Reconvertir</button>
           <button type="button" class="row-btn remove" title="Retirer">✕</button>
         `
@@ -647,6 +813,7 @@ function renderFileList() {
       qValueEl.textContent  = p.label;
       let detail = `lin ${p.linear} · ang ${p.angular}`;
       if (typeof entry.triangles === 'number' && entry.triQuality) {
+        // We have a real measurement → project from there.
         const baseP = qualityPreset(entry.triQuality);
         const measured = entry.triangles;
         if (entry.params.quality === entry.triQuality) {
@@ -655,6 +822,14 @@ function renderFileList() {
           const est = measured * (baseP.linear / p.linear);
           detail += ` · ${fmtTri(measured)} → ~${fmtTri(est)} tri`;
         }
+      } else {
+        // No conversion yet → rough heuristic from STEP size.
+        // Empirical: ~50k triangles per MB at quality 3 (Standard).
+        const sizeMb = entry.file.size / (1024 * 1024);
+        const baseP  = qualityPreset(3);
+        const anchor = Math.max(1000, Math.round(sizeMb * 50000));
+        const est    = anchor * (baseP.linear / p.linear);
+        detail += ` · ~${fmtTri(est)} tri (estimé)`;
       }
       qDetailEl.textContent = detail;
     };
@@ -684,7 +859,10 @@ function renderFileList() {
     row.querySelector('.row-btn.convert').addEventListener('click', () => convertEntry(entry));
     const optBtn = row.querySelector('.row-btn.optimize');
     if (optBtn) {
-      optBtn.addEventListener('click', () => optimizeEntry(entry));
+      optBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openOptMenu(optBtn, entry);
+      });
     }
     row.querySelector('.row-btn.remove').addEventListener('click', () => {
       clearVersions(entry);
@@ -924,6 +1102,9 @@ async function optimizeEntry(entry) {
 
   const form = new FormData();
   form.append('file', new File([blobIn], `${stemBase}.glb`, { type: 'model/gltf-binary' }));
+  const webQ = Math.min(5, Math.max(1, entry.params.webQuality | 0 || 3));
+  form.append('quality', String(webQ));
+  appendLog('log', null, `preset Web : ${webQ} · ${webPreset(webQ).label}`);
 
   let jobId;
   try {
@@ -1011,18 +1192,22 @@ async function optimizeEntry(entry) {
     // Push the optimized GLB as a new version in this entry's history.
     const webBlobUrl = URL.createObjectURL(webBlob);
     const webStem = `${stemBase}_web`;
+    const presetLabel = (outcome.info && outcome.info.preset) || webPreset(webQ).label;
     pushVersion(entry, {
       kind: 'web',
-      label: 'Web Optimisé',
+      label: `Web · ${presetLabel}`,
       glbUrl: webBlobUrl,
       glbSize: webBlob.size,
       stem: webStem,
+      triangles: outcome.info ? outcome.info.triangles : null,
     });
 
     if (row) row.classList.remove('converting');
     renderFileList();
     loadGlb(webBlobUrl, webStem, entry);
-    showToast(`✓ ${webStem}.glb prêt (${(webBlob.size/1024).toFixed(1)} KB)`);
+    const triMsg = outcome.info && outcome.info.triangles
+      ? ` · ${fmtTri(outcome.info.triangles)} tri` : '';
+    showToast(`✓ ${webStem}.glb (${(webBlob.size/1024).toFixed(1)} KB${triMsg})`);
   });
 }
 
@@ -1106,29 +1291,95 @@ function updateHeaderForEntry(entry) {
   }
 
   if (optBtnHdr) {
-    optBtnHdr.style.display = (v.kind !== 'web') ? 'inline-block' : 'none';
+    const showOpt = (v.kind !== 'web');
+    optBtnHdr.style.display = showOpt ? 'inline-block' : 'none';
     optBtnHdr.disabled = false;
   }
 }
 
+// Heavy-preview gate: above this many triangles, we don't render automatically
+// (the GPU + per-frame cost can hang the tab on low-end machines).
+const POLY_PREVIEW_LIMIT = 1_500_000;
+const heavyOverlay  = document.getElementById('heavy-overlay');
+const heavyDetailEl = document.getElementById('heavy-detail');
+const heavyShowBtn  = document.getElementById('heavy-show');
+let _pendingHeavy = null; // { gltf, stem, triangles }
+
+function countModelTriangles(model) {
+  let tris = 0;
+  model.traverse(n => {
+    if (n.isMesh && n.geometry) {
+      const geo = n.geometry;
+      if (geo.index) tris += geo.index.count / 3;
+      else if (geo.attributes.position) tris += geo.attributes.position.count / 3;
+    }
+  });
+  return Math.round(tris);
+}
+
+function showModel(gltf) {
+  clearModel();
+  const model = gltf.scene;
+  model.userData.isModel = true;
+  scene.add(model);
+  fitCamera(model);
+  updatePolycount(model);
+  aiBtn.style.display = 'inline-block';
+  aiBtn.disabled = false;
+  wireBtn.style.display = 'inline-block';
+  wireframeOn = false;
+  wireBtn.classList.remove('active');
+  updateHeaderForEntry(currentEntry);
+  showViewerPane();
+  heavyOverlay.classList.remove('visible');
+}
+
+function disposeGltf(gltf) {
+  if (!gltf || !gltf.scene) return;
+  gltf.scene.traverse(n => {
+    if (n.isMesh) {
+      if (n.geometry) n.geometry.dispose();
+      if (n.material) n.material.dispose();
+    }
+  });
+}
+
+heavyShowBtn.addEventListener('click', () => {
+  if (!_pendingHeavy) return;
+  const p = _pendingHeavy;
+  _pendingHeavy = null;
+  showModel(p.gltf);
+});
+
 function loadGlb(url, stem = 'model', entry = null) {
   currentStem  = stem;
   currentEntry = entry;
+  // Drop any previously-deferred heavy preview so its memory can be freed.
+  if (_pendingHeavy) { disposeGltf(_pendingHeavy.gltf); _pendingHeavy = null; }
+  heavyOverlay.classList.remove('visible');
+
   showLoading('Chargement du modèle…');
-  new GLTFLoader().load(url, gltf => {
-    clearModel();
-    const model = gltf.scene;
-    model.userData.isModel = true;
-    scene.add(model);
-    fitCamera(model);
-    updatePolycount(model);
-    aiBtn.style.display = 'inline-block';
-    aiBtn.disabled = false;
-    wireBtn.style.display = 'inline-block';
-    wireframeOn = false;
-    wireBtn.classList.remove('active');
-    updateHeaderForEntry(currentEntry);
-    showViewerPane();
+  // MeshoptDecoder is required to read GLBs produced by gltfpack
+  // (EXT_meshopt_compression). It's a no-op on uncompressed GLBs.
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+  loader.load(url, gltf => {
+    const tris = countModelTriangles(gltf.scene);
+    if (tris > POLY_PREVIEW_LIMIT) {
+      // Defer the actual scene insertion behind a confirmation overlay.
+      clearModel();
+      _pendingHeavy = { gltf, stem, triangles: tris };
+      heavyDetailEl.textContent =
+        `${tris.toLocaleString('fr-FR')} triangles (limite ${POLY_PREVIEW_LIMIT.toLocaleString('fr-FR')})`;
+      // Still expose the action buttons that don't need a rendered model.
+      aiBtn.style.display = 'inline-block';
+      aiBtn.disabled = false;
+      wireBtn.style.display = 'none';
+      updateHeaderForEntry(currentEntry);
+      showViewerPane();
+      heavyOverlay.classList.add('visible');
+      return;
+    }
+    showModel(gltf);
   }, undefined, err => {
     restoreAfterError('✗ Erreur affichage GLB');
     console.error(err);
@@ -1202,12 +1453,13 @@ const VIEWS = [
 wireBtn.addEventListener('click', toggleWireframe);
 aiBtn.addEventListener('click', captureViews);
 if (optBtnHdr) {
-  optBtnHdr.addEventListener('click', () => {
+  optBtnHdr.addEventListener('click', (e) => {
     if (!currentEntry) {
       showToast('✗ Aucun modèle à optimiser', true);
       return;
     }
-    optimizeEntry(currentEntry);
+    e.stopPropagation();
+    openOptMenu(optBtnHdr, currentEntry);
   });
 }
 prevBtn.addEventListener('click', () => navigate(currentEntry, -1));

@@ -524,8 +524,44 @@ def convert_result(job_id):
 
 
 # ---------------------------------------------------------------------------
-# Web optimization pipeline (clean_normals → gltfpack ×2 → restore_names ×2)
+# Web optimization pipeline (clean_normals → gltfpack)
 # ---------------------------------------------------------------------------
+
+# Quality presets for the "Optimize for Web" pass.
+# Each entry maps a 1-5 slider value to a list of gltfpack flags.
+# Common flags applied to every level:
+#   -kn  keep normals (preserve hard edges & shading)
+#   -km  keep mesh names (LOD / picking)
+#   -ke  keep extras (UV maps, custom data)
+WEB_PRESETS = {
+    1: {"label": "Lossless",  "flags": ["-noq"]},
+    2: {"label": "Léger",     "flags": ["-si", "0.7", "-cc"]},
+    3: {"label": "Standard",  "flags": ["-si", "0.5", "-mi", "-cc"]},
+    4: {"label": "Compact",   "flags": ["-si", "0.2", "-mi", "-cc",
+                                          "-vp", "12", "-vt", "10", "-vn", "8"]},
+    5: {"label": "Aggressif", "flags": ["-si", "0.05", "-mi", "-cc",
+                                          "-vp", "11", "-vt", "8",  "-vn", "6"]},
+}
+_WEB_COMMON = ["-kn", "-km", "-ke"]
+
+
+def _glb_triangle_count(path):
+    """Best-effort triangle count from a GLB by reading accessor counts only.
+    Safe on quantized GLBs (no buffer parsing)."""
+    try:
+        from pygltflib import GLTF2
+        gltf = GLTF2().load(path)
+        n = 0
+        for mesh in (gltf.meshes or []):
+            for prim in (mesh.primitives or []):
+                if prim.indices is not None:
+                    n += gltf.accessors[prim.indices].count // 3
+                elif prim.attributes and prim.attributes.POSITION is not None:
+                    n += gltf.accessors[prim.attributes.POSITION].count // 3
+        return n
+    except Exception:
+        return None
+
 
 def _run_cmd_streamed(job, cmd, label):
     """Run a subprocess streaming combined stdout/stderr into the job queue."""
@@ -553,15 +589,11 @@ def _run_cmd_streamed(job, cmd, label):
         raise RuntimeError(f"{cmd[0]} returned code {code}")
 
 
-def _run_optimization(job_id, input_glb_path, stem):
-    """Worker: clean_normals (incl. node→mesh names) → gltfpack QA + Web.
+def _run_optimization(job_id, input_glb_path, stem, quality=3):
+    """Worker: clean_normals (incl. node→mesh names) → gltfpack with preset.
 
-    Mesh names are propagated BEFORE gltfpack: clean_normals copies
-    node.name → mesh.name on the float32 GLB (which pygltflib can rewrite
-    safely), then gltfpack preserves them via `-km`. Doing it after gltfpack
-    would reopen a quantized GLB with pygltflib, which corrupts the
-    KHR_mesh_quantization metadata (accessor min/max in world-space vs
-    uint16 storage → thousands of validator errors).
+    `quality` (1-5) selects a preset from WEB_PRESETS. See the table at the top
+    of this section for what each level does.
     """
     job = _JOBS[job_id]
     job["status"] = "running"
@@ -569,8 +601,10 @@ def _run_optimization(job_id, input_glb_path, stem):
 
     work_dir   = job["work_dir"]
     cleaned    = os.path.join(work_dir, "cleaned.glb")
-    qa_final   = os.path.join(work_dir, f"{stem}_qa.glb")
     web_final  = os.path.join(work_dir, f"{stem}_web.glb")
+
+    preset = WEB_PRESETS.get(int(quality), WEB_PRESETS[3])
+    flags  = preset["flags"] + _WEB_COMMON
 
     try:
         # 1. clean_normals (also propagates node.name → mesh.name)
@@ -583,31 +617,17 @@ def _run_optimization(job_id, input_glb_path, stem):
             "line": f"cleaned.glb : {os.path.getsize(cleaned)/1024:.1f} KB",
         })
 
-        # 2. gltfpack QA — preserve quality, no quantization, keep names
+        # 2. gltfpack — preset-driven
         _emit(job, "stage",
-              {"name": "gltfpack_qa", "message": "gltfpack QA..."})
+              {"name": "gltfpack",
+               "message": f"gltfpack [{preset['label']}]..."})
         _run_cmd_streamed(
             job,
-            ["gltfpack", "-i", cleaned, "-o", qa_final,
-             "-si", "0.1", "-noq", "-kn", "-km", "-ke"],
-            "gltfpack-qa",
+            ["gltfpack", "-i", cleaned, "-o", web_final, *flags],
+            "gltfpack",
         )
         _emit(job, "log", {
-            "source": "gltfpack-qa",
-            "line": f"{stem}_qa.glb  : {os.path.getsize(qa_final)/1024:.1f} KB",
-        })
-
-        # 3. gltfpack Web — full optimization (instancing, mesh dedup, quantize)
-        _emit(job, "stage",
-              {"name": "gltfpack_web", "message": "gltfpack Web..."})
-        _run_cmd_streamed(
-            job,
-            ["gltfpack", "-i", cleaned, "-o", web_final,
-             "-si", "0.1", "-mi", "-cc", "-kn", "-km", "-ke"],
-            "gltfpack-web",
-        )
-        _emit(job, "log", {
-            "source": "gltfpack-web",
+            "source": "gltfpack",
             "line": f"{stem}_web.glb : {os.path.getsize(web_final)/1024:.1f} KB",
         })
 
@@ -620,15 +640,17 @@ def _run_optimization(job_id, input_glb_path, stem):
         return
 
     job["result_path"] = web_final
-    # Bonus side-channel; not currently exposed via UI, kept for future use.
-    job["qa_path"] = qa_final
     job["status"] = "done"
     out_size = os.path.getsize(web_final)
+    triangles = _glb_triangle_count(web_final)
     total = time.time() - t_start
     _emit(job, "done", {
         "message": f"Optimisation terminée en {total:.2f}s",
         "stem": f"{stem}_web",
         "size_kb": round(out_size / 1024, 1),
+        "triangles": triangles,
+        "preset": preset["label"],
+        "quality": int(quality),
     })
     _emit(job, "end", None)
 
@@ -641,6 +663,12 @@ def optimize():
     file = request.files["file"]
     if not file.filename.lower().endswith(".glb"):
         return jsonify({"error": "File must be a .glb"}), 400
+
+    try:
+        quality = int(request.form.get("quality", "3"))
+    except (TypeError, ValueError):
+        quality = 3
+    quality = max(1, min(5, quality))
 
     work_dir   = tempfile.mkdtemp(prefix="cad_opt_")
     input_path = os.path.join(work_dir, "input.glb")
@@ -656,7 +684,6 @@ def optimize():
         "status":      "queued",
         "lines":       queue.Queue(),
         "result_path": None,
-        "qa_path":     None,
         "work_dir":    work_dir,
         "error":       None,
         "stem":        stem,
@@ -665,17 +692,19 @@ def optimize():
     with _JOBS_LOCK:
         _JOBS[job_id] = job
 
+    preset_label = WEB_PRESETS[quality]["label"]
     print(f"[optimize] ▶ job {job_id} : {file.filename} "
-          f"({in_size/1024:.1f} KB)", flush=True)
+          f"({in_size/1024:.1f} KB, preset {quality}/{preset_label})", flush=True)
 
     _emit(job, "stage", {
         "name": "queued",
-        "message": f"{file.filename} ({in_size/1024:.1f} KB) en file...",
+        "message": f"{file.filename} ({in_size/1024:.1f} KB) "
+                   f"— preset {preset_label}",
     })
 
     t = threading.Thread(
         target=_run_optimization,
-        args=(job_id, input_path, stem),
+        args=(job_id, input_path, stem, quality),
         daemon=True,
     )
     t.start()
